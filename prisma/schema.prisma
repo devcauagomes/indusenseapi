@@ -1,0 +1,349 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ======================================================
+// ENUMS
+// ======================================================
+
+enum Perfil {
+  ADMIN
+  OPERADOR
+  VISUALIZADOR
+}
+
+enum SensorTipo {
+  temperatura
+  umidade
+  qualidade_ar
+  gas
+}
+
+enum SensorStatus {
+  normal
+  atencao
+  critico
+  offline
+}
+
+enum OcorrenciaStatus {
+  aberta
+  em_andamento
+  resolvida
+}
+
+enum AlertaStatus {
+  aberto
+  lido
+  resolvido
+}
+
+// ======================================================
+// USUÁRIO
+// ======================================================
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  nome         String
+  email        String    @unique
+  senhaHash    String
+  cargo        String?
+  empresa      String?
+  perfil       Perfil    @default(VISUALIZADOR)
+  ativo        Boolean   @default(true)
+  ultimoAcesso DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  alertasResolvidos Alert[]
+  ocorrencias       Ocorrencia[]
+
+  @@index([perfil])
+  @@index([ativo])
+  @@map("users")
+}
+
+// ======================================================
+// TOKENS REVOGADOS
+// ======================================================
+
+model RevokedToken {
+  jti       String   @id
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@map("revoked_tokens")
+}
+
+// ======================================================
+// SALA / SETOR
+// Representa o setor/local físico monitorado.
+// ======================================================
+
+model Sala {
+  id                String   @id @default(uuid()) @db.Uuid
+  codigo            String   @unique
+  nome              String
+  setor             String
+  localizacao       String?
+  nfcTagId          String   @unique
+  dispositivoModelo String   @default("ESP32 DevKit")
+  ativo             Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  sensores     Sensor[]
+  cameras      Camera[]
+  dispositivos Dispositivo[]
+  ocorrencias  Ocorrencia[]
+  alertas      Alert[]
+
+  @@index([setor])
+  @@index([ativo])
+  @@map("salas")
+}
+
+// ======================================================
+// DISPOSITIVO
+// ESP32, gateway, controlador etc.
+// ======================================================
+
+model Dispositivo {
+  id            String    @id @default(uuid()) @db.Uuid
+  codigo        String?   @unique
+  nome          String
+  tipo          String
+  status        String    @default("offline")
+  localizacao   String?
+  ip            String?
+  macAddress    String?
+  firmware      String?
+  ultimoContato DateTime?
+  ativo         Boolean   @default(true)
+
+  salaId String @db.Uuid
+  sala   Sala   @relation(fields: [salaId], references: [id], onDelete: Cascade)
+
+  sensores    Sensor[]
+  leituras    Reading[]
+  ocorrencias Ocorrencia[]
+  alertas     Alert[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([salaId])
+  @@index([status])
+  @@index([ativo])
+  @@map("dispositivos")
+}
+
+// ======================================================
+// SENSOR
+// ======================================================
+
+model Sensor {
+  id     String     @id @default(uuid()) @db.Uuid
+  codigo String?    @unique
+  nome   String
+  tipo   SensorTipo
+
+  salaId String @db.Uuid
+  sala   Sala   @relation(fields: [salaId], references: [id], onDelete: Cascade)
+
+  dispositivoId String?      @db.Uuid
+  dispositivo   Dispositivo? @relation(fields: [dispositivoId], references: [id], onDelete: SetNull)
+
+  limiteMin     Float
+  limiteMax     Float
+  valorAtual    Float        @default(0)
+  status        SensorStatus @default(offline)
+  ultimaLeitura DateTime?
+  ativo         Boolean      @default(true)
+
+  leituras Reading[]
+  alertas  Alert[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([salaId])
+  @@index([dispositivoId])
+  @@index([tipo])
+  @@index([status])
+  @@index([ativo])
+  @@map("sensors")
+}
+
+// ======================================================
+// LEITURA
+// ======================================================
+
+model Reading {
+  id String @id @default(uuid()) @db.Uuid
+
+  sensorId String @db.Uuid
+  sensor   Sensor @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+
+  dispositivoId String?      @db.Uuid
+  dispositivo   Dispositivo? @relation(fields: [dispositivoId], references: [id], onDelete: SetNull)
+
+  valor    Float
+  status   SensorStatus @default(normal)
+  dataHora DateTime     @default(now())
+
+  @@index([sensorId, dataHora(sort: Desc)])
+  @@index([dispositivoId, dataHora(sort: Desc)])
+  @@index([dataHora])
+  @@map("readings")
+}
+
+// ======================================================
+// ALERTA
+// ======================================================
+
+model Alert {
+  id String @id @default(uuid()) @db.Uuid
+
+  sensorId String @db.Uuid
+  sensor   Sensor @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+
+  salaId String? @db.Uuid
+  sala   Sala?   @relation(fields: [salaId], references: [id], onDelete: SetNull)
+
+  dispositivoId String?      @db.Uuid
+  dispositivo   Dispositivo? @relation(fields: [dispositivoId], references: [id], onDelete: SetNull)
+
+  tipo        SensorTipo
+  valorMedido Float
+  limite      Float
+  severidade  SensorStatus
+  mensagem    String?
+
+  status AlertaStatus @default(aberto)
+
+  lido   Boolean   @default(false)
+  lidoEm DateTime?
+
+  resolvido   Boolean   @default(false)
+  resolvidoEm DateTime?
+
+  resolvidoPorId String? @db.Uuid
+  resolvidoPor   User?   @relation(fields: [resolvidoPorId], references: [id], onDelete: SetNull)
+
+  dataHora DateTime @default(now())
+
+  @@index([sensorId, dataHora(sort: Desc)])
+  @@index([salaId, dataHora(sort: Desc)])
+  @@index([dispositivoId, dataHora(sort: Desc)])
+  @@index([lido, dataHora(sort: Desc)])
+  @@index([resolvido])
+  @@index([status])
+  @@map("alerts")
+}
+
+// ======================================================
+// CÂMERA
+// ======================================================
+
+model Camera {
+  id String @id @default(uuid()) @db.Uuid
+
+  salaId String @db.Uuid
+  sala   Sala   @relation(fields: [salaId], references: [id], onDelete: Cascade)
+
+  nome        String
+  tipo        String  @default("IP")
+  localizacao String?
+  endereco    String?
+  online      Boolean @default(true)
+
+  pessoas         Int @default(0)
+  epiConformidade Int @default(100)
+
+  ocorrencia String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ocorrencias Ocorrencia[]
+
+  @@index([salaId])
+  @@index([online])
+  @@map("cameras")
+}
+
+// ======================================================
+// EPI
+// ======================================================
+
+model Epi {
+  id          String  @id @default(uuid()) @db.Uuid
+  nome        String
+  descricao   String?
+  status      String  @default("ativo")
+  obrigatorio Boolean @default(true)
+
+  ocorrencias Ocorrencia[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([obrigatorio])
+  @@map("epis")
+}
+
+// ======================================================
+// OCORRÊNCIA
+// Evento identificado no monitoramento.
+// Exemplo:
+// - Falta de capacete
+// - Falta de óculos
+// - Pessoa sem colete
+// - Sensor em situação crítica
+// ======================================================
+
+model Ocorrencia {
+  id String @id @default(uuid()) @db.Uuid
+
+  tipo      String
+  descricao String?
+
+  dataHora DateTime         @default(now())
+  status   OcorrenciaStatus @default(aberta)
+
+  // Sala onde aconteceu
+  salaId String? @db.Uuid
+  sala   Sala?   @relation(fields: [salaId], references: [id], onDelete: SetNull)
+
+  // Câmera responsável pela identificação
+  cameraId String? @db.Uuid
+  camera   Camera? @relation(fields: [cameraId], references: [id], onDelete: SetNull)
+
+  // Dispositivo responsável, quando existir
+  dispositivoId String?      @db.Uuid
+  dispositivo   Dispositivo? @relation(fields: [dispositivoId], references: [id], onDelete: SetNull)
+
+  // EPI relacionado à ocorrência
+  epiId String? @db.Uuid
+  epi   Epi?    @relation(fields: [epiId], references: [id], onDelete: SetNull)
+
+  // Usuário que tratou/resolveu
+  usuarioId String? @db.Uuid
+  usuario   User?   @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([salaId])
+  @@index([cameraId])
+  @@index([dispositivoId])
+  @@index([epiId])
+  @@index([usuarioId])
+  @@index([dataHora(sort: Desc)])
+  @@index([status])
+  @@map("ocorrencias")
+}
